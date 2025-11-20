@@ -17,6 +17,7 @@ typedef struct so_t so_t;
 so_t *so_cria(cpu_t *cpu, mem_t *mem, mmu_t *mmu,
               es_t *es, console_t *console);
 void so_destroi(so_t *self);
+typedef enum { simples, round_robin, prioridade} escalonador_atual;
 
 // Chamadas de sistema
 // Uma chamada de sistema é realizada colocando a identificação da
@@ -76,5 +77,9 @@ void so_destroi(so_t *self);
 // bloqueia o processo chamador até que o processo com o pid informado termine
 // retorna sem bloquear, com erro, se não existir processo com esse pid
 #define SO_ESPERA_PROC 9
+
+#define TIPOS_IRQ 6
+
+#define QUANTUM_INICIAL 5
 
 #endif // SO_H
