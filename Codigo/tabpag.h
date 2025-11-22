@@ -64,5 +64,6 @@ err_t tabpag_traduz(tabpag_t *self, int pagina, int *pquadro);
 #define QUADRO_INVALIDO -1
 void tabpag_zera_bit_alterada(tabpag_t *self, int pagina);
 static int tabpag_encontra_pagina_pelo_quadro(tabpag_t *tab, int quadro);
+static int tabpag_numero_pagina(tabpag_t *tab);
 
 #endif // TABPAG_H

@@ -23,7 +23,7 @@ struct processo_t{
     estado_proc estado;
     float prio;
     int id_terminal;
-    int espera_terminal;
+    int espera;
     int quantum;
     tabpag_t *tab_pag;
     //int n_paginas;    //número de páginas do processo, nao acessivel pela tabela

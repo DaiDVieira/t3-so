@@ -20,7 +20,7 @@ processo_t* inicializa_processo(processo_t* processo, int id, int PC, int tam){
     processo->n_exec = 0;
     processo->prio = 0.5;
     processo->id_terminal = (id % 4) * 4;     //0-3, 4-7, 8-11, 12-15
-    processo->espera_terminal = 0;     //Sem espera = 0, Le = 1, Escreve = 2
+    processo->espera = 0;     //Sem espera = 0, Le = 1, Escreve = 2, Acesso a disco = 3
     processo->quantum = QUANTUM_INICIAL;
     processo->tab_pag = tabpag_cria();
     //processo->n_paginas = tam/TAM_PAGINA +1;

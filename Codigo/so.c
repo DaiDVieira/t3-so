@@ -16,6 +16,7 @@
 #include "programa.h"
 #include "tabpag.h"
 #include "processo.h"
+#include "subs_pagina.h"
 
 #include <stdlib.h>
 #include <stdbool.h>
@@ -65,7 +66,7 @@ struct so_t {
 
   int regA, regX, regPC, regERRO, regComplemento; // cópia do estado da CPU
   // t2: tabela de processos, processo corrente, pendências, etc
-   processo_t processos[MAX_PROCESSOS];
+  processo_t processos[MAX_PROCESSOS];
   processo_t *processo_corrente;
   Lista_processos* ini_fila_proc;
   Lista_processos* ini_fila_proc_prontos;
@@ -78,7 +79,10 @@ struct so_t {
   //     completo que isso
   //int quadro_livre;
   mem_t *mem_secundaria;
-  int disco_livre;
+  FIFO *FIFO;
+  Lista_quadros *lista_quadros_LRU;
+  int algortimo_substituicao;   /*1 = FIFO, 2 = LRU*/
+  int disco_livre;    /*guarda tempo em que o disco estara livre*/
   int prox_end_quadro_livre;
   bool quadros_livres[QUANT_QUADROS];
   int quadro_processo[QUANT_QUADROS];
@@ -136,6 +140,11 @@ so_t *so_cria(cpu_t *cpu, mem_t *mem, mmu_t *mmu, es_t *es, console_t *console, 
   self->erro_interno = false;
 
   self->mem_secundaria = mem_sec;
+  self->algortimo_substituicao = 1;
+  if(self->algortimo_substituicao == 1)
+    self->FIFO = fila_cria();
+  else
+    self->lista_quadros_LRU = NULL;
   self->disco_livre = 0;
   self->prox_end_quadro_livre = 0;
   for(int i = 0; i < QUANT_QUADROS; i++){
@@ -243,6 +252,83 @@ static void so_trata_pendencias(so_t *self)
   // - desbloqueio de processos
   // - contabilidades
   // - etc
+
+  /*se esta usando terminal ou nao alocou/precisa terminal*/
+  if(self->processo_corrente != NULL && (self->processo_corrente->estado == bloqueado || self->processo_corrente->espera == 0))
+      self->dispositivos_livres[self->processo_corrente->id_terminal/4] = true;
+  /*E/S pendente*/
+  processo_t* processo_pendente = NULL;
+  int quant_proc_bloqueado = 0;
+  while((processo_pendente = so_proximo_pendente(self, quant_proc_bloqueado)) != NULL){   /*Enquanto tiver processos pendentes*/
+    quant_proc_bloqueado++;
+    console_printf("(depois while processo pendente)");
+    int dado, estado_term;
+    if(processo_pendente->espera == 1){ 
+      console_printf("verifica espera_terminal=1");
+      if((es_le(self->es, processo_pendente->id_terminal + TERM_TECLADO_OK, &estado_term)) == ERR_OK){
+        if(estado_term != 0 && self->dispositivos_livres[processo_pendente->id_terminal / 4]){
+          if ((es_le(self->es, processo_pendente->id_terminal + TERM_TECLADO, &dado)) != ERR_OK)
+            console_printf("SO: problema no acesso ao teclado");
+          else{
+            processo_pendente->A = dado;
+            so_muda_estado_processo(self, processo_pendente->id, pronto);
+          }
+        }
+      }
+      else{
+        console_printf("SO: teclado nao disponivel"); 
+      }
+    }
+    else if(processo_pendente->espera == 2){
+      console_printf("verifica espera_terminal=2");
+      if((es_le(self->es, processo_pendente->id_terminal + TERM_TELA_OK, &estado_term)) == ERR_OK){
+        if(estado_term != 0 && self->dispositivos_livres[processo_pendente->id_terminal / 4]){
+          dado = processo_pendente->X;
+          if ((es_escreve(self->es,  processo_pendente->id_terminal + TERM_TELA, dado)) != ERR_OK)
+            console_printf("SO: problema no acesso à tela");
+          else{
+            processo_pendente->A = 0;
+            so_muda_estado_processo(self, processo_pendente->id, pronto);
+          }
+        }
+        console_printf("process_pend estado_term %d", estado_term);
+      }
+      else{
+        console_printf("SO: tela nao disponivel"); /*retirar depois - depuracao*/
+      }
+    }
+    /*else{   //espera_terminal = 0, pode ser por esperar outro processo acabar
+      //Desbloqueio de processos bloqueados por espera
+      so_chamada_espera_proc(self, processo_pendente);
+    }*/
+  }
+
+  /*bloqueia processos por tempo de cpu e reinicia o quantum*/
+  if(self->escalonador != simples){
+    if(self->processo_corrente != NULL && self->processo_corrente->quantum == 0){
+      if(self->ini_fila_proc_prontos != NULL){
+        so_muda_estado_processo(self, self->processo_corrente->id, bloqueado);
+        console_printf("(escalonador = %d)", self->escalonador);
+        self->ini_fila_proc_prontos = so_coloca_fila_pronto(self, self->processo_corrente);
+      }
+      self->processo_corrente->quantum = QUANTUM_INICIAL;
+    }
+  }
+
+  //desbloqueio de acesso a disco e desbloquear processos
+  int agora;
+  es_le(self->es, D_RELOGIO_REAL, &agora);
+  if(agora < self->disco_livre){
+    for(int i = 0; i < MAX_PROCESSOS; i++){
+      if(self->processos[i].espera == 3){ /*espera por disco livre*/
+        int ind = encontra_indice_processo(self->processos, i);
+        if (ind != -1) {
+          so_muda_estado_processo(self, i, pronto);
+        }
+      }
+    }
+  }
+
 }
 
 //funcao auxiliar temporaria para escalonamento
@@ -272,9 +358,9 @@ static void so_escalona(so_t *self)
       console_printf("(prox_proc_id %d)", prox_processo->id);
     else
       console_printf("(prox_proc eh nulo)");
-    if(prox_processo != NULL && prox_processo->espera_terminal != 0){
+    if(prox_processo != NULL && prox_processo->espera != 0){
       self->dispositivos_livres[prox_processo->id_terminal/4] = false;
-      prox_processo->espera_terminal = 0;
+      prox_processo->espera = 0;
     }
     
     self->processo_corrente = prox_processo; //pode ser NULL
@@ -397,9 +483,6 @@ static void so_trata_reset(so_t *self)
   if (init != NULL) {
     self->processo_corrente = init;
     so_muda_estado_processo(self, init->id, pronto);
-    /*init->estado = pronto;
-    self->ini_fila_proc_prontos = so_coloca_fila_pronto(self, init);
-    self->ini_fila_proc = lst_insere_ordenado(self->ini_fila_proc, init->id, init->prio);*/
   }
 
   console_printf("(init id_terminal %d)", self->processo_corrente->id_terminal);  
@@ -438,6 +521,10 @@ static void so_trata_irq_relogio(so_t *self)
   //   um escalonador com quantum
   if(self->escalonador != simples && self->processo_corrente != NULL)
     self->processo_corrente->quantum--; 
+
+  if(self->processo_corrente != NULL && self->algortimo_substituicao == 2){
+    atualiza_envelhecimento(self->lista_quadros_LRU, self->processo_corrente->tab_pag, self->pagina_processo, self->processo_corrente->id);
+  }
 }
 
 // foi gerada uma interrupção para a qual o SO não está preparado
@@ -509,7 +596,7 @@ static void so_chamada_le(so_t *self)
     return;
   }
   if (estado == 0){
-    self->processo_corrente->espera_terminal = 1;
+    self->processo_corrente->espera = 1;
     so_muda_estado_processo(self, self->processo_corrente->id, bloqueado);
     return;
   }
@@ -542,7 +629,7 @@ static void so_chamada_escr(so_t *self)
   }
   if (estado == 0){
     console_printf("espera terminal = 2 estado = %d", estado);
-    self->processo_corrente->espera_terminal = 2;
+    self->processo_corrente->espera = 2;
     so_muda_estado_processo(self, self->processo_corrente->id, bloqueado);
     return;
   } 
@@ -626,7 +713,14 @@ static void so_chamada_mata_proc(so_t *self)
     self->processo_corrente->A = -1;
   }
 
+  for(int i = 0; i < QUANT_PAGINAS; i++){
+    if(self->pagina_processo[i] == id_proc_a_matar){
+      self->pagina_processo[i] = -1;
+      self->paginas_livres[i] = true;
+    }
+  }
   tabpag_destroi(self->processo_corrente->tab_pag);
+
   so_muda_estado_processo(self, id_proc_a_matar, morto);
 
   if(self->processo_corrente != NULL){
@@ -738,7 +832,19 @@ static int so_carrega_programa_na_memoria_virtual(so_t *self, programa_t *progra
     if(quadro == -1){
       console_printf("SO: nao ha quadros livres");
       /*troca - retorna qual pagina esta livre*/
+      if(self->algortimo_substituicao == 1)
+        quadro = FIFO_quadro_a_substituir(self->FIFO);
+      else
+        self->lista_quadros_LRU = LRU_quadro_a_substituir(self->lista_quadros_LRU, &quadro);
+      if(quadro == -1){
+        console_printf("SO: nao ha quadros na FIFO");
+        return;
+      }
     }
+    if(self->algortimo_substituicao == 1)
+      fila_insere(self->FIFO, quadro);
+    else
+      self->lista_quadros_LRU = lst_pag_insere_ordenado(self->lista_quadros_LRU, quadro, 0);
     tabpag_define_quadro(processo->tab_pag, pagina_ini + i, quadro);
     // carrega programa na memoria principal
     int end_fis = quadro * TAM_PAGINA;
@@ -944,34 +1050,6 @@ static void so_libera_pagina(so_t *self, int pagina){
   }
 }
 
-static void so_troca_carrega_pagina(so_t *self, int pagina){
-  /*somente copia*/
-  int quadro_destino = so_proximo_quadro_livre(self);
-  if(quadro_destino == -1){
-    /*algoritmo de substituicao de pagina*/
-  }
-  int end_secundario;   //endereço físico do disco
-
-  /*if((tabpag_traduz(self->processo_corrente->tab_pag, pagina, &end_secundario)) != ERR_OK){
-    console_printf("SO: pagina invalida para leitura");
-    return;
-  }*/
-  /*copia dados do disco para RAM*/
-  for (int i = 0; i < TAM_PAGINA; i++) {
-      int valor;
-      mem_le(self->mem_secundaria, end_secundario + i, &valor);
-      mem_escreve(self->mem, quadro_destino * TAM_PAGINA + i, valor);   //endereço fisico: quadro_destino * TAM_PAGINA
-  }
-
-  tabpag_define_quadro(self->processo_corrente->tab_pag, pagina, quadro_destino);
-
-  self->quadros_livres[quadro_destino] = false;
-  self->quadro_processo[quadro_destino] = self->processo_corrente->id;
-
-  self->processo_corrente->n_falha_paginas++;
-  atualiza_tempo_acesso_disco(self);
-}
-
 static void so_troca_salva_pagina(so_t *self, int quadro_fisico){
   if (self->quadros_livres[quadro_fisico]) {
     return; //quadro livre, sem dados
@@ -999,6 +1077,44 @@ static void so_troca_salva_pagina(so_t *self, int quadro_fisico){
   //self->prox_end_quadro_livre++;
   atualiza_tempo_acesso_disco(self);
 
+}
+
+static void so_troca_carrega_pagina(so_t *self, int pagina){
+  /*somente copia*/
+  int quadro_destino = so_proximo_quadro_livre(self);
+  if(quadro_destino == -1){
+    if(self->algortimo_substituicao == 1)
+      quadro_destino = FIFO_quadro_a_substituir(self->FIFO);
+    else
+      LRU_quadro_a_substituir(self->lista_quadros_LRU, &quadro_destino);
+    
+    if(quadro_destino == -1){
+      console_printf("SO: nao ha paginas na FIFO");
+      return;
+    }
+    so_troca_salva_pagina(self, quadro_destino);
+  }
+  int end_secundario;   //endereço físico do disco
+
+  /*if((tabpag_traduz(self->processo_corrente->tab_pag, pagina, &end_secundario)) != ERR_OK){
+    console_printf("SO: pagina invalida para leitura");
+    return;
+  }*/
+  /*copia dados do disco para RAM*/
+  for (int i = 0; i < TAM_PAGINA; i++) {
+      int valor;
+      mem_le(self->mem_secundaria, end_secundario + i, &valor);
+      mem_escreve(self->mem, quadro_destino * TAM_PAGINA + i, valor);   //endereço fisico: quadro_destino * TAM_PAGINA
+  }
+
+  tabpag_define_quadro(self->processo_corrente->tab_pag, pagina, quadro_destino);
+
+  self->quadros_livres[quadro_destino] = false;
+  fila_insere(self->FIFO, quadro_destino);
+  self->quadro_processo[quadro_destino] = self->processo_corrente->id;
+
+  self->processo_corrente->n_falha_paginas++;
+  atualiza_tempo_acesso_disco(self);
 }
 
 /*static void so_troca_salva_pagina(so_t *self, int quadro_fisico){
