@@ -76,11 +76,18 @@ struct so_t {
   // primeiro quadro da memória que está livre (quadros anteriores estão ocupados)
   // t3: com memória virtual, o controle de memória livre e ocupada deve ser mais
   //     completo que isso
-  int quadro_livre;
+  //int quadro_livre;
+  mem_t *mem_secundaria;
+  int disco_livre;
+  int prox_end_quadro_livre;
+  bool quadros_livres[QUANT_QUADROS];
+  int quadro_processo[QUANT_QUADROS];
+  bool paginas_livres[QUANT_PAGINAS];
+  int pagina_processo[QUANT_PAGINAS];
   // uma tabela de páginas para poder usar a MMU
   // t3: com processos, não tem esta tabela global, tem que ter uma para
   //     cada processo
-  tabpag_t *tabpag_global;
+  //tabpag_t *tabpag_global;
 };
 
 
@@ -116,7 +123,7 @@ so_t *so_cria_valores_processo(so_t *self){
   return self;
 }
 
-so_t *so_cria(cpu_t *cpu, mem_t *mem, mmu_t *mmu, es_t *es, console_t *console)
+so_t *so_cria(cpu_t *cpu, mem_t *mem, mmu_t *mmu, es_t *es, console_t *console, mem_t *mem_sec)
 {
   so_t *self = malloc(sizeof(*self));
   if (self == NULL) return NULL;
@@ -128,6 +135,19 @@ so_t *so_cria(cpu_t *cpu, mem_t *mem, mmu_t *mmu, es_t *es, console_t *console)
   self->console = console;
   self->erro_interno = false;
 
+  self->mem_secundaria = mem_sec;
+  self->disco_livre = 0;
+  self->prox_end_quadro_livre = 0;
+  for(int i = 0; i < QUANT_QUADROS; i++){
+    self->quadros_livres[i] = true;
+    self->quadro_processo[i] = -1;
+  }
+  for(int i = 0; i < QUANT_PAGINAS; i++){
+    self->paginas_livres[i] = true;
+    self->pagina_processo[i] = -1;
+  }
+  
+
   self = so_cria_valores_processo(self);
 
   // quando a CPU executar uma instrução CHAMAC, deve chamar a função
@@ -137,8 +157,10 @@ so_t *so_cria(cpu_t *cpu, mem_t *mem, mmu_t *mmu, es_t *es, console_t *console)
   // inicializa a tabela de páginas global, e entrega ela para a MMU
   // t3: com processos, essa tabela não existiria, teria uma por processo, que
   //     deve ser colocada na MMU quando o processo é despachado para execução
-  self->tabpag_global = tabpag_cria();
-  mmu_define_tabpag(self->mmu, self->tabpag_global);
+
+  //self->tabpag_global = tabpag_cria();
+  //mmu_define_tabpag(self->mmu, self->tabpag_global);
+
 
   return self;
 }
@@ -149,6 +171,8 @@ void so_destroi(so_t *self)
   free(self);
 }
 
+static void so_troca_carrega_pagina(so_t *self, int end_secundario);
+static void so_troca_salva_pagina(so_t *self, int quadro_fisico);
 
 // ---------------------------------------------------------------------
 // TRATAMENTO DE INTERRUPÇÃO {{{1
@@ -280,6 +304,7 @@ static int so_despacha(so_t *self)
     return 0;
   }
   else{
+    mmu_define_tabpag(self->mmu, NULL);
     return 1;
   }
 }
@@ -318,6 +343,8 @@ static void so_trata_irq(so_t *self, int irq)
 }
 
 processo_t* so_cria_entrada_processo(so_t* self, int PC, int tam);
+static int so_proximo_quadro_livre(so_t *self);
+static int so_proxima_pagina_livre(so_t *self);
 
 // chamada uma única vez, quando a CPU inicializa
 static void so_trata_reset(so_t *self)
@@ -346,17 +373,12 @@ static void so_trata_reset(so_t *self)
   //   contém o endereço final da memória protegida (que não podem ser usadas
   //   por programas de usuário)
   // t3: o controle de memória livre deve ser mais aprimorado que isso  
-  self->quadro_livre = CPU_END_FIM_PROT / TAM_PAGINA + 1;
-
-  // t2: deveria criar um processo para o init, e inicializar o estado do
-  //   processador para esse processo com os registradores zerados, exceto
-  //   o PC e o modo.
-  // como não tem suporte a processos, está carregando os valores dos
-  //   registradores diretamente no estado da CPU mantido pelo SO; daí vai
-  //   copiar para o início da memória pelo despachante, de onde a CPU vai
-  //   carregar para os seus registradores quando executar a instrução RETI
-  //   em bios.asm (que é onde está a instrução CHAMAC que causou a execução
-  //   deste código
+  //self->quadro_livre = CPU_END_FIM_PROT / TAM_PAGINA + 1;     /*primeira página após endereços protegidos*/
+  //self->prox_end_quadro_livre = (CPU_END_FIM_PROT / TAM_PAGINA + 1) * TAM_PAGINA;
+  for(int i = 0; i < CPU_END_FIM_PROT/TAM_PAGINA +1; i++){
+    self->quadros_livres[i] = false;
+  }
+  //int ind = so_proximo_quadro_livre(self);
 
   // coloca o programa init na memória
   processo_t *init =  so_cria_entrada_processo(self, 0, 0); // deveria inicializar um processo...
@@ -367,16 +389,17 @@ static void so_trata_reset(so_t *self)
     return;
   }
   // altera o PC para o endereço de carga
-  init->PC = ender;
+  //init->PC = ender;
   init->erro = ERR_OK;
   init->regErro = 0; 
 
   //atualiza processo corrente e coloca init na fila de processos
   if (init != NULL) {
-      self->processo_corrente = init;
-      init->estado = pronto;
-      self->ini_fila_proc_prontos = so_coloca_fila_pronto(self, init);
-      self->ini_fila_proc = lst_insere_ordenado(self->ini_fila_proc, init->id, init->prio);
+    self->processo_corrente = init;
+    so_muda_estado_processo(self, init->id, pronto);
+    /*init->estado = pronto;
+    self->ini_fila_proc_prontos = so_coloca_fila_pronto(self, init);
+    self->ini_fila_proc = lst_insere_ordenado(self->ini_fila_proc, init->id, init->prio);*/
   }
 
   console_printf("(init id_terminal %d)", self->processo_corrente->id_terminal);  
@@ -562,7 +585,7 @@ static void so_chamada_cria_proc(so_t *self)
     int ender_carga = so_carrega_programa(self, processo_criado, nome);
     if (ender_carga != -1) {
       // t2: deveria escrever no PC do descritor do processo criado
-      processo_criado->PC = ender_carga;
+      //processo_criado->PC = ender_carga;
       processo_criado->erro = ERR_OK;
       processo_criado->regErro = 0;
       //} 
@@ -603,6 +626,7 @@ static void so_chamada_mata_proc(so_t *self)
     self->processo_corrente->A = -1;
   }
 
+  tabpag_destroi(self->processo_corrente->tab_pag);
   so_muda_estado_processo(self, id_proc_a_matar, morto);
 
   if(self->processo_corrente != NULL){
@@ -649,13 +673,15 @@ static int so_carrega_programa(so_t *self, processo_t *processo, char *nome_do_e
   }
 
   int end_carga;
-  if (processo == NULL) {
+  /*if (processo == NULL) {
     end_carga = so_carrega_programa_na_memoria_fisica(self, programa);
   } else {
     end_carga = so_carrega_programa_na_memoria_virtual(self, programa, processo);
-  }
+  }*/
+  end_carga = so_carrega_programa_na_memoria_fisica(self, programa);
   /*coloca os valores corretos do processo*/
   processo->PC = prog_end_carga(programa);
+  processo->memIni = processo->PC;
   processo->memTam = prog_tamanho(programa);
 
   if(end_carga == -1){
@@ -700,27 +726,45 @@ static int so_carrega_programa_na_memoria_virtual(so_t *self, programa_t *progra
   int pagina_ini = end_virt_ini / TAM_PAGINA;
   int pagina_fim = end_virt_fim / TAM_PAGINA;
   int n_paginas = pagina_fim - pagina_ini + 1;
-  int quadro_ini = self->quadro_livre;
-  int quadro_fim = quadro_ini + n_paginas - 1;
+
+  int quadro_ini = so_proximo_quadro_livre(self);
+  //int quadro_fim = quadro_ini + n_paginas - 1;
   // mapeia as páginas nos quadros
-  for (int i = 0; i < n_paginas; i++) {
-    tabpag_define_quadro(self->tabpag_global, pagina_ini + i, quadro_ini + i);
+  //for (int i = 0; i < n_paginas; i++) {
+  //  tabpag_define_quadro(processo->tab_pag, pagina_ini + i, quadro_ini + i);
+  //}
+  for(int i = 0; i < n_paginas; i++){
+    int quadro = so_proximo_quadro_livre(self);
+    if(quadro == -1){
+      console_printf("SO: nao ha quadros livres");
+      /*troca - retorna qual pagina esta livre*/
+    }
+    tabpag_define_quadro(processo->tab_pag, pagina_ini + i, quadro);
+    // carrega programa na memoria principal
+    int end_fis = quadro * TAM_PAGINA;
+    int end_virt = so_proxima_pagina_livre(self) * TAM_PAGINA;
+    for(int dentro_pag = 0; dentro_pag < TAM_PAGINA; dentro_pag++){
+      if (mem_escreve(self->mem, end_fis + dentro_pag, prog_dado(programa, end_virt +dentro_pag)) != ERR_OK) {
+        console_printf("Erro na carga da memória, end virt %d fís %d\n", end_virt + dentro_pag, end_fis + dentro_pag);
+        return -1;
+      }
+    }
   }
-  self->quadro_livre = quadro_fim + 1;
+
+  //self->quadro_livre = quadro_fim + 1;
 
   // carrega o programa na memória principal
   int end_fis_ini = quadro_ini * TAM_PAGINA;
   int end_fis = end_fis_ini;
-  for (int end_virt = end_virt_ini; end_virt <= end_virt_fim; end_virt++) {
+  /*for (int end_virt = end_virt_ini; end_virt <= end_virt_fim; end_virt++) {
     if (mem_escreve(self->mem, end_fis, prog_dado(programa, end_virt)) != ERR_OK) {
       console_printf("Erro na carga da memória, end virt %d fís %d\n", end_virt,
                      end_fis);
       return -1;
     }
     end_fis++;
-  }
-  console_printf("SO: carga na memória virtual V%d-%d F%d-%d npag=%d",
-                 end_virt_ini, end_virt_fim, end_fis_ini, end_fis - 1, n_paginas);
+  }*/
+  console_printf("SO: carga na memória virtual V%d-%d F%d-%d npag=%d", end_virt_ini, end_virt_fim, end_fis_ini, end_fis - 1, n_paginas);
   return end_virt_ini;
 }
 
@@ -865,4 +909,130 @@ static void so_libera_espera_proc(so_t *self, int id_proc_morrendo){
     }
   }
 }
+
+static void atualiza_tempo_acesso_disco(so_t *self){
+  int agora;
+  es_le(self->es, D_RELOGIO_REAL, &agora);
+  if (agora < self->disco_livre) {
+      self->disco_livre += ESPERA_ACESSO_SECUNDARIA;
+  } else {
+      self->disco_livre = agora + ESPERA_ACESSO_SECUNDARIA;
+  }
+}
+
+static int so_proximo_quadro_livre(so_t *self){
+  for(int i = 0; i < QUANT_QUADROS; i++){
+    if(self->quadros_livres[i])
+      return i;
+  }
+  return -1;
+}
+
+static int so_proxima_pagina_livre(so_t *self){
+  for(int i = 0; i < QUANT_PAGINAS; i++){
+    if(self->paginas_livres[i]){
+      self->paginas_livres[i] = false;
+      return i;
+    }
+  }
+  return -1;
+}
+
+static void so_libera_pagina(so_t *self, int pagina){
+  if (pagina >= 0 && pagina < QUANT_PAGINAS) {
+      self->paginas_livres[pagina] = true;
+  }
+}
+
+static void so_troca_carrega_pagina(so_t *self, int pagina){
+  /*somente copia*/
+  int quadro_destino = so_proximo_quadro_livre(self);
+  if(quadro_destino == -1){
+    /*algoritmo de substituicao de pagina*/
+  }
+  int end_secundario;   //endereço físico do disco
+
+  /*if((tabpag_traduz(self->processo_corrente->tab_pag, pagina, &end_secundario)) != ERR_OK){
+    console_printf("SO: pagina invalida para leitura");
+    return;
+  }*/
+  /*copia dados do disco para RAM*/
+  for (int i = 0; i < TAM_PAGINA; i++) {
+      int valor;
+      mem_le(self->mem_secundaria, end_secundario + i, &valor);
+      mem_escreve(self->mem, quadro_destino * TAM_PAGINA + i, valor);   //endereço fisico: quadro_destino * TAM_PAGINA
+  }
+
+  tabpag_define_quadro(self->processo_corrente->tab_pag, pagina, quadro_destino);
+
+  self->quadros_livres[quadro_destino] = false;
+  self->quadro_processo[quadro_destino] = self->processo_corrente->id;
+
+  self->processo_corrente->n_falha_paginas++;
+  atualiza_tempo_acesso_disco(self);
+}
+
+static void so_troca_salva_pagina(so_t *self, int quadro_fisico){
+  if (self->quadros_livres[quadro_fisico]) {
+    return; //quadro livre, sem dados
+  }
+  int pagina = tabpag_encontra_pagina_pelo_quadro(self->processo_corrente->tab_pag, quadro_fisico);
+  if (pagina == -1) {
+      console_printf("SO: quadro %d não pertence ao processo corrente.\n", quadro_fisico);
+      return;
+  }
+  int end_secundario;   //endereço físico do disco
+  /*copia dados da RAM para disco*/
+  for (int i = 0; i < TAM_PAGINA; i++) {
+    int valor;
+    mem_le(self->mem, quadro_fisico * TAM_PAGINA + i, &valor);
+    mem_escreve(self->mem_secundaria, end_secundario + i, valor);
+  }
+  
+  tabpag_invalida_pagina(self->processo_corrente->tab_pag, pagina);
+  tabpag_zera_bit_alterada(self->processo_corrente->tab_pag, pagina);
+  tabpag_define_quadro(self->processo_corrente->tab_pag, pagina, QUADRO_INVALIDO);   /*página agora está apenas no disco*/
+  self->quadros_livres[quadro_fisico] = true;   /*libera quadro*/
+  self->quadro_processo[quadro_fisico] = -1;
+  self->pagina_processo[pagina] = self->processo_corrente->id;
+
+  //self->prox_end_quadro_livre++;
+  atualiza_tempo_acesso_disco(self);
+
+}
+
+/*static void so_troca_salva_pagina(so_t *self, int quadro_fisico){
+  if(self->quadros_livres[quadro_fisico]){
+    int pagina = tabpag_encontra_pagina_pelo_quadro(self->processo_corrente->tab_pag, quadro_fisico);
+    if (pagina != -1) {
+      tabpag_zera_bit_alterada(self->processo_corrente->tab_pag, pagina);
+    }
+    else{
+      mapeada para outro processo
+      so_proximo_quadro_livre_princ(self);
+    }
+    copia dados da RAM para disco
+    for (int i = 0; i < TAM_PAGINA; i++) {
+        int valor;
+        mem_le(self->mem, (quadro_fisico * TAM_PAGINA) + i, &valor);
+        mmu_escreve(self->mmu, x + i, valor, supervisor);
+    }
+  }
+  else{
+    quadro nao ocupado
+    console_printf("SO: quadro livre, sem valor");
+  }
+
+  tabpag_zera_bit_alterada(self->processo_corrente->tab_pag, self->processo_corrente->PC);
+  atualiza_tempo_acesso_disco(self);
+
+  int ind_prox_quadro_livre = so_proximo_quadro_livre_secun(self);
+  if(ind_prox_quadro_livre != -1)
+    self->prox_end_quadro_livre += ind_prox_quadro_livre * TAM_PAGINA;  atualiza proximo endereco de disco
+  else{
+    algoritmo de substituicao de pagina
+  }
+}*/
+
+
 

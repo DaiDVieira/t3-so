@@ -23,6 +23,8 @@ processo_t* inicializa_processo(processo_t* processo, int id, int PC, int tam){
     processo->espera_terminal = 0;     //Sem espera = 0, Le = 1, Escreve = 2
     processo->quantum = QUANTUM_INICIAL;
     processo->tab_pag = tabpag_cria();
+    //processo->n_paginas = tam/TAM_PAGINA +1;
+    processo->n_falha_paginas = 0;
     return processo;
 }
 

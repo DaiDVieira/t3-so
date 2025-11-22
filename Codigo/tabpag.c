@@ -135,3 +135,23 @@ err_t tabpag_traduz(tabpag_t *self, int pagina, int *pquadro)
   *pquadro = self->tabela[pagina].quadro;
   return ERR_OK;
 }
+
+void tabpag_zera_bit_alterada(tabpag_t *self, int pagina){
+    if (!tabpag__pagina_valida(self, pagina)) return;
+    self->tabela[pagina].alterada = false;
+}
+
+static int tabpag_encontra_pagina_pelo_quadro(tabpag_t *tab, int quadro){
+  for(int p = 0; p < tab->tam_tab; p++) {
+      int q;
+      if (tabpag_traduz(tab, p, &q) == ERR_OK) {
+          if (q == quadro)
+              return p;
+      }
+  }
+  return -1;
+}
+
+static int tabpag_numero_pagina(tabpag_t *tab){
+  return tab->tam_tab;
+}

@@ -15,7 +15,8 @@ typedef struct so_t so_t;
 #include "console.h" // só para uma gambiarra
 
 so_t *so_cria(cpu_t *cpu, mem_t *mem, mmu_t *mmu,
-              es_t *es, console_t *console);
+    es_t *es, console_t *console, mem_t *mem_sec);
+
 void so_destroi(so_t *self);
 typedef enum { simples, round_robin, prioridade} escalonador_atual;
 
@@ -81,5 +82,12 @@ typedef enum { simples, round_robin, prioridade} escalonador_atual;
 #define TIPOS_IRQ 6
 
 #define QUANTUM_INICIAL 5
+
+#define ESPERA_ACESSO_SECUNDARIA 50
+
+// constantes
+#define MEM_TAM 10000        // tamanho da memória principal
+#define QUANT_QUADROS MEM_TAM/TAM_PAGINA
+#define QUANT_PAGINAS (QUANT_QUADROS * 5)
 
 #endif // SO_H
