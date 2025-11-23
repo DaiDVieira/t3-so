@@ -51,7 +51,7 @@ int fila_retira (FIFO *f){
     }
     int v = l->id_quadro;
     f->inicio = l->prox;
-    if (fl_vazia(f))
+    if (fila_vazia(f))
         f->fim = NULL;
     free(l);
     return v;
@@ -187,7 +187,7 @@ Lista_quadros* lst_pag_ordena(Lista_quadros* l){
 // FUNÇÃO DE SUBSTITUIÇÃO POR LRU
 
 Lista_quadros* LRU_quadro_a_substituir(Lista_quadros* l, int *quadro){
-    if(l == NULL) return -1;
+    if(l == NULL) return NULL;
 
     l = lst_pag_ordena(l);
     *quadro = l->id_quadro;

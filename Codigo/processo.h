@@ -26,7 +26,8 @@ struct processo_t{
     int espera;
     int quantum;
     tabpag_t *tab_pag;
-    //int n_paginas;    //número de páginas do processo, nao acessivel pela tabela
+    int pos_ini_mem_sec;
+    int n_paginas;    //número de páginas do processo, nao acessivel pela tabela
     int n_falha_paginas;  //contador de falha de página (métricas)
 };
 typedef struct processo_t processo_t;

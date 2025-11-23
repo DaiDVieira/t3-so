@@ -141,7 +141,7 @@ void tabpag_zera_bit_alterada(tabpag_t *self, int pagina){
     self->tabela[pagina].alterada = false;
 }
 
-static int tabpag_encontra_pagina_pelo_quadro(tabpag_t *tab, int quadro){
+int tabpag_encontra_pagina_pelo_quadro(tabpag_t *tab, int quadro){
   for(int p = 0; p < tab->tam_tab; p++) {
       int q;
       if (tabpag_traduz(tab, p, &q) == ERR_OK) {
@@ -152,6 +152,6 @@ static int tabpag_encontra_pagina_pelo_quadro(tabpag_t *tab, int quadro){
   return -1;
 }
 
-static int tabpag_numero_pagina(tabpag_t *tab){
+int tabpag_numero_pagina(tabpag_t *tab){
   return tab->tam_tab;
 }
