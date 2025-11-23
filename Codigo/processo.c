@@ -3,10 +3,11 @@
 #include "processo.h"
 #include "mmu.h"
 
-processo_t* inicializa_processo(processo_t* processo, int id, int PC, int tam){
+void inicializa_processo(processo_t* processo, int id, int PC, int tam){
     if (PC < 0) {
       // t2: deveria escrever no PC do descritor do processo criado
-        return NULL;
+        console_printf("SO: endereco PC invalido");
+        return;
     }
     processo->id = id;
     processo->PC = PC;
@@ -24,8 +25,11 @@ processo_t* inicializa_processo(processo_t* processo, int id, int PC, int tam){
     processo->quantum = QUANTUM_INICIAL;
     processo->tab_pag = tabpag_cria();
     processo->n_falha_paginas = 0;
-    processo->n_paginas = tam/TAM_PAGINA +1;
-    return processo;
+    if(tam % TAM_PAGINA == 0)
+        processo->n_paginas = tam/TAM_PAGINA;
+    else
+        processo->n_paginas = tam/TAM_PAGINA +1;
+    //return processo;
 }
 
 int encontra_indice_processo(processo_t processos[MAX_PROCESSOS], int id){

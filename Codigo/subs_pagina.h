@@ -17,6 +17,7 @@ FIFO* fila_cria (void);
 void fila_libera (FIFO* f);
 int fila_vazia (FIFO* f);
 void fila_insere (FIFO* f, int id);
+int fila_busca(FIFO *f, int id);
 int fila_retira (FIFO* f);
 int FIFO_quadro_a_substituir(FIFO *f);
 

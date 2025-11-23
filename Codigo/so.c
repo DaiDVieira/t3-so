@@ -658,7 +658,7 @@ static void altera_registrador_A(so_t *self, processo_t *processo){
   self->processo_corrente->A = processo->A;
   int ind = encontra_indice_processo(self->processos, processo->id);
   if(ind != -1) 
-    self->processos->A = processo->A;
+    self->processos[ind].A = processo->A;
 }
 
 // implementação da chamada se sistema SO_CRIA_PROC
@@ -726,6 +726,12 @@ static void so_chamada_mata_proc(so_t *self)
     self->processo_corrente->A = -1;
   }
 
+  for(int i = 0; i < QUANT_QUADROS; i++){
+    if(self->quadro_processo[i] == id_proc_a_matar){
+      self->quadro_processo[i] = -1;
+      self->quadros_livres[i] = true;
+    }
+  }
   for(int i = 0; i < QUANT_PAGINAS; i++){
     if(self->pagina_processo[i] == id_proc_a_matar){
       self->pagina_processo[i] = -1;
@@ -846,9 +852,9 @@ static int so_carrega_programa_na_memoria_virtual(so_t *self, programa_t *progra
       console_printf("SO: nao ha paginas livres");
       return -1;
     }*/
-  int end_sec = self->prox_end_pag_livre * TAM_PAGINA;
+  int end_sec = self->prox_end_pag_livre;
 
-  for (int i = end_virt_ini; i < end_virt_fim; i++) {
+  for (int i = end_virt_ini; i <= end_virt_fim; i++) {
     mem_escreve(self->mem_secundaria, end_sec + i, prog_dado(programa, i));
   }
   for(int p = pagina_ini; p <= pagina_fim; p++){
@@ -914,7 +920,10 @@ static bool so_copia_str_do_processo(so_t *self, int tam, char str[tam],
     //   os endereços e acessar a memória, porque todo o conteúdo do processo
     //   está na memória principal, e só temos uma tabela de páginas
     if (mmu_le(self->mmu, end_virt + indice_str, &caractere, usuario) != ERR_OK) {
-      return false;
+      int end_sec = end_virt + processo->pos_ini_mem_sec;
+      if(end_sec > processo->pos_ini_mem_sec + processo->n_paginas * TAM_PAGINA)
+        return false;
+      mem_le(self->mem_secundaria, end_sec, &caractere);
     }
     if (caractere < 0 || caractere > 255) {
       return false;
@@ -1051,8 +1060,9 @@ static void atualiza_tempo_acesso_disco(so_t *self){
 
 static int so_proximo_quadro_livre(so_t *self){
   for(int i = 0; i < QUANT_QUADROS; i++){
-    if(self->quadros_livres[i])
+    if(self->quadros_livres[i]){
       return i;
+    }
   }
   return -1;
 }
@@ -1073,15 +1083,17 @@ static void so_libera_pagina(so_t *self, int pagina){
   }
 }*/
 
-static void so_troca_salva_pagina(so_t *self, int quadro_fisico, int end_secundario){
+static int so_troca_salva_pagina(so_t *self, int quadro_fisico, int end_secundario){
   if (self->quadros_livres[quadro_fisico]) {
-    return; //quadro livre, sem dados
+    return 1; //quadro livre, sem dados
   }
   int pagina = tabpag_encontra_pagina_pelo_quadro(self->processo_corrente->tab_pag, quadro_fisico);
   if (pagina == -1) {
       console_printf("SO: quadro %d não pertence ao processo corrente.\n", quadro_fisico);
-      return;
+      return -1;
   }
+  if(!tabpag_bit_alteracao(self->processo_corrente->tab_pag, pagina))   //pagina nao foi alterada
+    return 1;
   //int end_secundario;   //endereço físico do disco
   /*copia dados da RAM para disco*/
   for (int i = 0; i < TAM_PAGINA; i++) {
@@ -1095,11 +1107,10 @@ static void so_troca_salva_pagina(so_t *self, int quadro_fisico, int end_secunda
   tabpag_define_quadro(self->processo_corrente->tab_pag, pagina, QUADRO_INVALIDO);   /*página agora está apenas no disco*/
   self->quadros_livres[quadro_fisico] = true;   /*libera quadro*/
   self->quadro_processo[quadro_fisico] = -1;
-  self->pagina_processo[pagina] = self->processo_corrente->id;
+  self->pagina_processo[pagina] = -1;
 
   //self->prox_end_quadro_livre++;
-  atualiza_tempo_acesso_disco(self);
-
+  return 1;
 }
 
 static void so_troca_carrega_pagina(so_t *self, int pagina){
@@ -1110,13 +1121,16 @@ static void so_troca_carrega_pagina(so_t *self, int pagina){
     if(self->algortimo_substituicao == 1)
       quadro_destino = FIFO_quadro_a_substituir(self->FIFO);
     else
-      LRU_quadro_a_substituir(self->lista_quadros_LRU, &quadro_destino);
+      self->lista_quadros_LRU = LRU_quadro_a_substituir(self->lista_quadros_LRU, &quadro_destino);
     
     if(quadro_destino == -1){
       console_printf("SO: nao ha paginas na FIFO");
       return;
     }
-    so_troca_salva_pagina(self, quadro_destino, end_secundario);
+    if(so_troca_salva_pagina(self, quadro_destino, end_secundario) == -1){
+      so_chamada_mata_proc(self);
+    return;
+    }
   }
 
   /*if((tabpag_traduz(self->processo_corrente->tab_pag, pagina, &end_secundario)) != ERR_OK){
@@ -1133,16 +1147,21 @@ static void so_troca_carrega_pagina(so_t *self, int pagina){
   tabpag_define_quadro(self->processo_corrente->tab_pag, pagina, quadro_destino);
 
   self->quadros_livres[quadro_destino] = false;
-  fila_insere(self->FIFO, quadro_destino);
   self->quadro_processo[quadro_destino] = self->processo_corrente->id;
+  fila_insere(self->FIFO, quadro_destino);
 
-  self->processo_corrente->n_falha_paginas++;
-  atualiza_tempo_acesso_disco(self);
 }
 
 static void trata_falha_pagina(so_t* self, int end_erro){
+  if(end_erro < 0 || end_erro >= self->processo_corrente->n_paginas * TAM_PAGINA){
+    so_chamada_mata_proc(self);
+    return;
+  }
   int pagina = end_erro/TAM_PAGINA;
   so_troca_carrega_pagina(self, pagina);
+  self->processo_corrente->n_falha_paginas++;
+  atualiza_tempo_acesso_disco(self);
+  so_muda_estado_processo(self, self->processo_corrente->id, pronto);
 }
 
 

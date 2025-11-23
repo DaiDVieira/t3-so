@@ -33,6 +33,7 @@ int fila_vazia (FIFO *f){
 }
 
 void fila_insere (FIFO *f, int id){
+    if(fila_busca(f, id) == 1) return;
     Lst_quadros_FIFO *novo = (Lst_quadros_FIFO*) malloc(sizeof(Lst_quadros_FIFO));
     novo->id_quadro = id;
     novo->prox = NULL;
@@ -41,6 +42,15 @@ void fila_insere (FIFO *f, int id){
     else
         f->inicio = novo;
     f->fim = novo;
+}
+
+int fila_busca(FIFO *f, int id) {
+    Lst_quadros_FIFO *l = f->inicio;
+    while (f != NULL) {
+        if (l->id_quadro == id) return 1;
+        l = l->prox;
+    }
+    return 0;
 }
 
 int fila_retira (FIFO *f){
@@ -84,6 +94,8 @@ int lst_pag_vazia(Lista_quadros* l){
 }
 
 Lista_quadros* lst_pag_insere_ordenado(Lista_quadros* l, int id, unsigned int env){
+    if(lst_pag_busca(l, id) != NULL)        //se ja esta na LRU, somente retorna
+        return l;
     Lista_quadros* novo;
     Lista_quadros* ant = NULL; /* ponteiro para elemento anterior */
     Lista_quadros* p = l; /* ponteiro para percorrer a lista */
@@ -152,18 +164,17 @@ int *lista_paginas_alterar(Lista_quadros* l, int tam, int pag_processo[QUANT_PAG
 
 void altera_envelhecimento(Lista_quadros* l, tabpag_t *tab, int *id_paginas){     /*chamada por irq_relogio*/
     Lista_quadros *aux = l;
-    while(aux != NULL){
-        for(int j = 0; j < tabpag_numero_pagina(tab); j++){
-            if(aux->id_quadro == id_paginas[j]){
-                aux->envelhecimento >>= 1;        //divide por 2
-                int pagina = tabpag_encontra_pagina_pelo_quadro(tab, aux->id_quadro);
-                if(tabpag_bit_acesso(tab, pagina)){
-                    aux->envelhecimento = soma_bit_mais_significativo(aux->envelhecimento);
-                    tabpag_zera_bit_acesso(tab, pagina);
-                }
-                aux = aux->prox;
+    while (aux != NULL) {
+        int pagina = tabpag_encontra_pagina_pelo_quadro(tab, aux->id_quadro);
+
+        if (pagina != -1) {
+            aux->envelhecimento >>= 1;
+            if (tabpag_bit_acesso(tab, pagina)) {
+                aux->envelhecimento = soma_bit_mais_significativo(aux->envelhecimento);
+                tabpag_zera_bit_acesso(tab, pagina);
             }
         }
+        aux = aux->prox;
     }
 }
 
