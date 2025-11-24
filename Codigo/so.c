@@ -86,8 +86,6 @@ struct so_t {
   int prox_end_pag_livre;
   bool quadros_livres[QUANT_QUADROS];
   int quadro_processo[QUANT_QUADROS];
-  bool paginas_livres[QUANT_PAGINAS];
-  int pagina_processo[QUANT_PAGINAS];
   // uma tabela de páginas para poder usar a MMU
   // t3: com processos, não tem esta tabela global, tem que ter uma para
   //     cada processo
@@ -150,10 +148,6 @@ so_t *so_cria(cpu_t *cpu, mem_t *mem, mmu_t *mmu, es_t *es, console_t *console, 
   for(int i = 0; i < QUANT_QUADROS; i++){
     self->quadros_livres[i] = true;
     self->quadro_processo[i] = -1;
-  }
-  for(int i = 0; i < QUANT_PAGINAS; i++){
-    self->paginas_livres[i] = true;
-    self->pagina_processo[i] = -1;
   }
 
   self = so_cria_valores_processo(self);
@@ -303,6 +297,17 @@ static void so_trata_pendencias(so_t *self)
       so_chamada_espera_proc(self, processo_pendente);
     }*/
   }
+  //desbloqueio de acesso a disco para processos
+  int agora;
+  es_le(self->es, D_RELOGIO_REAL, &agora);
+  if(agora >= self->disco_livre){
+    for(int i = 0; i < MAX_PROCESSOS; i++){
+      if(self->processos[i].estado == bloqueado && self->processos[i].espera == 3){ /*espera por disco livre*/
+        self->processos[i].espera = 0;
+        so_muda_estado_processo(self, i, pronto);
+      }
+    }
+  }
 
   /*bloqueia processos por tempo de cpu e reinicia o quantum*/
   if(self->escalonador != simples){
@@ -313,20 +318,6 @@ static void so_trata_pendencias(so_t *self)
         self->ini_fila_proc_prontos = so_coloca_fila_pronto(self, self->processo_corrente);
       }
       self->processo_corrente->quantum = QUANTUM_INICIAL;
-    }
-  }
-
-  //desbloqueio de acesso a disco e desbloquear processos
-  int agora;
-  es_le(self->es, D_RELOGIO_REAL, &agora);
-  if(agora < self->disco_livre){
-    for(int i = 0; i < MAX_PROCESSOS; i++){
-      if(self->processos[i].espera == 3){ /*espera por disco livre*/
-        int ind = encontra_indice_processo(self->processos, i);
-        if (ind != -1) {
-          so_muda_estado_processo(self, i, pronto);
-        }
-      }
     }
   }
 
@@ -534,7 +525,7 @@ static void so_trata_irq_relogio(so_t *self)
     self->processo_corrente->quantum--; 
 
   if(self->processo_corrente != NULL && self->algortimo_substituicao == 2){
-    atualiza_envelhecimento(self->lista_quadros_LRU, self->processo_corrente->tab_pag, self->pagina_processo, self->processo_corrente->id);
+    atualiza_envelhecimento(self->lista_quadros_LRU, self->processo_corrente->tab_pag, self->quadro_processo, self->processo_corrente->id);
   }
 }
 
@@ -702,9 +693,6 @@ static void so_chamada_cria_proc(so_t *self)
   }
   altera_registrador_A(self, processo_criador);
 
-  for(int i = 0; i < processo_criado->n_paginas; i++){
-    trata_falha_pagina(self, ender_carga + i * TAM_PAGINA);
-  }
 }
 
 static void so_libera_espera_proc(so_t *self, int id_proc_morrendo);
@@ -730,12 +718,6 @@ static void so_chamada_mata_proc(so_t *self)
     if(self->quadro_processo[i] == id_proc_a_matar){
       self->quadro_processo[i] = -1;
       self->quadros_livres[i] = true;
-    }
-  }
-  for(int i = 0; i < QUANT_PAGINAS; i++){
-    if(self->pagina_processo[i] == id_proc_a_matar){
-      self->pagina_processo[i] = -1;
-      self->paginas_livres[i] = true;
     }
   }
   tabpag_destroi(self->processo_corrente->tab_pag);
@@ -789,13 +771,14 @@ static int so_carrega_programa(so_t *self, processo_t *processo, char *nome_do_e
   if (processo == NULL) {
     end_carga = so_carrega_programa_na_memoria_fisica(self, programa);
   } else {
+    int end_disco = self->prox_end_pag_livre;
     end_carga = so_carrega_programa_na_memoria_virtual(self, programa, processo);
+    if(end_carga != -1)
+      processo->pos_ini_mem_sec = end_disco;
     /*coloca os valores corretos do processo*/
     processo->PC = prog_end_carga(programa);
     processo->memIni = processo->PC;
     processo->memTam = prog_tamanho(programa);
-    if(end_carga != -1)
-      processo->pos_ini_mem_sec = end_carga;
   }  
 
   if(end_carga == -1){
@@ -1067,49 +1050,38 @@ static int so_proximo_quadro_livre(so_t *self){
   return -1;
 }
 
-/*static int so_proxima_pagina_livre(so_t *self){
-  for(int i = 0; i < QUANT_PAGINAS; i++){
-    if(self->paginas_livres[i]){
-      self->paginas_livres[i] = false;
-      return i;
-    }
-  }
-  return -1;
-}
-
-static void so_libera_pagina(so_t *self, int pagina){
-  if (pagina >= 0 && pagina < QUANT_PAGINAS) {
-      self->paginas_livres[pagina] = true;
-  }
-}*/
-
-static int so_troca_salva_pagina(so_t *self, int quadro_fisico, int end_secundario){
+static int so_troca_salva_pagina(so_t *self, int quadro_fisico){
   if (self->quadros_livres[quadro_fisico]) {
     return 1; //quadro livre, sem dados
   }
-  int pagina = tabpag_encontra_pagina_pelo_quadro(self->processo_corrente->tab_pag, quadro_fisico);
+  int ind = encontra_indice_processo(self->processos, self->quadro_processo[quadro_fisico]);  //encontra indice do processo a ser substituido
+  if(ind == -1){
+    console_printf("SO: Erro critico - quadro %d marcado ocupado por processo inexistente", quadro_fisico);
+    self->quadros_livres[quadro_fisico] = true;
+    self->quadro_processo[quadro_fisico] = -1;
+    return 1;
+  }
+  processo_t *proc_substituido = &self->processos[ind];
+  int pagina = tabpag_encontra_pagina_pelo_quadro(proc_substituido->tab_pag, quadro_fisico);
   if (pagina == -1) {
       console_printf("SO: quadro %d não pertence ao processo corrente.\n", quadro_fisico);
       return -1;
   }
-  if(!tabpag_bit_alteracao(self->processo_corrente->tab_pag, pagina))   //pagina nao foi alterada
-    return 1;
-  //int end_secundario;   //endereço físico do disco
-  /*copia dados da RAM para disco*/
-  for (int i = 0; i < TAM_PAGINA; i++) {
-    int valor;
-    mem_le(self->mem, quadro_fisico * TAM_PAGINA + i, &valor);
-    mem_escreve(self->mem_secundaria, end_secundario + i, valor);
+  if(tabpag_bit_alteracao(proc_substituido->tab_pag, pagina)){   //pagina foi alterada
+    int end_secundario = proc_substituido->pos_ini_mem_sec + (pagina * TAM_PAGINA);   //endereço físico do disco
+    /*copia dados da RAM para disco*/
+    for (int i = 0; i < TAM_PAGINA; i++) {
+      int valor;
+      mem_le(self->mem, quadro_fisico * TAM_PAGINA + i, &valor);
+      mem_escreve(self->mem_secundaria, end_secundario + i, valor);
+    }
+    tabpag_zera_bit_alterada(proc_substituido->tab_pag, pagina);
   }
-  
-  tabpag_invalida_pagina(self->processo_corrente->tab_pag, pagina);
-  tabpag_zera_bit_alterada(self->processo_corrente->tab_pag, pagina);
-  tabpag_define_quadro(self->processo_corrente->tab_pag, pagina, QUADRO_INVALIDO);   /*página agora está apenas no disco*/
+  tabpag_invalida_pagina(proc_substituido->tab_pag, pagina);
+
   self->quadros_livres[quadro_fisico] = true;   /*libera quadro*/
   self->quadro_processo[quadro_fisico] = -1;
-  self->pagina_processo[pagina] = -1;
 
-  //self->prox_end_quadro_livre++;
   return 1;
 }
 
@@ -1127,7 +1099,7 @@ static void so_troca_carrega_pagina(so_t *self, int pagina){
       console_printf("SO: nao ha paginas na FIFO");
       return;
     }
-    if(so_troca_salva_pagina(self, quadro_destino, end_secundario) == -1){
+    if(so_troca_salva_pagina(self, quadro_destino) == -1){
       so_chamada_mata_proc(self);
     return;
     }
@@ -1148,7 +1120,12 @@ static void so_troca_carrega_pagina(so_t *self, int pagina){
 
   self->quadros_livres[quadro_destino] = false;
   self->quadro_processo[quadro_destino] = self->processo_corrente->id;
-  fila_insere(self->FIFO, quadro_destino);
+  if(self->algortimo_substituicao == 1)
+    fila_insere(self->FIFO, quadro_destino);
+  else{
+    unsigned int env = soma_bit_mais_significativo(0);    //inicia como o último acessado
+    self->lista_quadros_LRU = lst_pag_insere_ordenado(self->lista_quadros_LRU, quadro_destino, env);
+  }
 
 }
 
@@ -1161,7 +1138,8 @@ static void trata_falha_pagina(so_t* self, int end_erro){
   so_troca_carrega_pagina(self, pagina);
   self->processo_corrente->n_falha_paginas++;
   atualiza_tempo_acesso_disco(self);
-  so_muda_estado_processo(self, self->processo_corrente->id, pronto);
+  self->processo_corrente->espera = 3;
+  so_muda_estado_processo(self, self->processo_corrente->id, bloqueado);
 }
 
 

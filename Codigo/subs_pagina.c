@@ -46,7 +46,7 @@ void fila_insere (FIFO *f, int id){
 
 int fila_busca(FIFO *f, int id) {
     Lst_quadros_FIFO *l = f->inicio;
-    while (f != NULL) {
+    while (l != NULL) {
         if (l->id_quadro == id) return 1;
         l = l->prox;
     }
@@ -148,7 +148,7 @@ unsigned int soma_bit_mais_significativo(unsigned int valor){
     return valor | mascara;     //soma valor com mascara = 1 no bit mais significativo
 }
 
-int *lista_paginas_alterar(Lista_quadros* l, int tam, int pag_processo[QUANT_PAGINAS], int id_proc){
+/*int *lista_paginas_alterar(Lista_quadros* l, int tam, int pag_processo[QUANT_PAGINAS], int id_proc){
     int j = 0;
     int *lista = (int *) malloc(tam * sizeof(int));
     for(int i = 0; i < tam; i++) lista[i] = -1;
@@ -162,10 +162,9 @@ int *lista_paginas_alterar(Lista_quadros* l, int tam, int pag_processo[QUANT_PAG
     return lista;
 }
 
-void altera_envelhecimento(Lista_quadros* l, tabpag_t *tab, int *id_paginas){     /*chamada por irq_relogio*/
+void altera_envelhecimento(Lista_quadros* l, tabpag_t *tab, int *id_paginas){     //chamada por irq_relogio
     Lista_quadros *aux = l;
     while (aux != NULL) {
-        int pagina = tabpag_encontra_pagina_pelo_quadro(tab, aux->id_quadro);
 
         if (pagina != -1) {
             aux->envelhecimento >>= 1;
@@ -178,10 +177,27 @@ void altera_envelhecimento(Lista_quadros* l, tabpag_t *tab, int *id_paginas){   
     }
 }
 
-void atualiza_envelhecimento(Lista_quadros* l, tabpag_t *tab, int pag_processo[QUANT_PAGINAS], int id_proc){
+void atualiza_envelhecimento(Lista_quadros* l, tabpag_t *tab, int pagina_processo[QUANT_QUADROS], int id_proc){
     int tam = tabpag_numero_pagina(tab);
-    int *lista_paginas = lista_paginas_alterar(l, tam, pag_processo, id_proc);
+    int *lista_paginas = lista_paginas_alterar(l, tam, pagina_processo, id_proc);
     altera_envelhecimento(l, tab, lista_paginas);
+}*/
+
+void atualiza_envelhecimento(Lista_quadros* l, tabpag_t *tab, int quadro_processo[QUANT_QUADROS], int id_proc) {
+    Lista_quadros *aux = l;
+    while (aux != NULL) {
+        if(quadro_processo[aux->id_quadro] == id_proc){
+            int pagina = tabpag_encontra_pagina_pelo_quadro(tab, aux->id_quadro);
+            if (pagina != -1) {
+                aux->envelhecimento >>= 1;
+                if (tabpag_bit_acesso(tab, pagina)) {
+                    aux->envelhecimento = soma_bit_mais_significativo(aux->envelhecimento);
+                    tabpag_zera_bit_acesso(tab, pagina);
+                }
+            }
+        }
+        aux = aux->prox;
+    }
 }
 
 Lista_quadros* lst_pag_ordena(Lista_quadros* l){
