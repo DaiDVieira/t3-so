@@ -5,7 +5,6 @@
 
 void inicializa_processo(processo_t* processo, int id, int PC, int tam){
     if (PC < 0) {
-      // t2: deveria escrever no PC do descritor do processo criado
         console_printf("SO: endereco PC invalido");
         return;
     }
@@ -29,7 +28,6 @@ void inicializa_processo(processo_t* processo, int id, int PC, int tam){
         processo->n_paginas = tam/TAM_PAGINA;
     else
         processo->n_paginas = tam/TAM_PAGINA +1;
-    //return processo;
 }
 
 int encontra_indice_processo(processo_t processos[MAX_PROCESSOS], int id){
@@ -71,12 +69,6 @@ void lst_libera(Lista_processos* l){
         free(p);
         p = t;
     }
-}
-
-void lst_imprime(Lista_processos* l){
-    Lista_processos* p;
-    for (p = l; p != NULL; p = p->prox)
-        console_printf("pid = %d prio = %.2f estado = %d\n", p->id, p->prio, p->estado);
 }
 
 int lst_vazia(Lista_processos* l){
@@ -121,7 +113,6 @@ Lista_processos* lst_insere_ordenado(Lista_processos* l, int id, float prio){
 }
 
 Lista_processos* lst_adicionar_final(Lista_processos* l, int id, float prio){
-    console_printf("(proc_id adicionar %d)", id);
 	Lista_processos* p = (Lista_processos*)malloc(sizeof(Lista_processos));
 	if(p == NULL){
 		printf("\nFalha ao alocar memoria\n");
@@ -136,12 +127,10 @@ Lista_processos* lst_adicionar_final(Lista_processos* l, int id, float prio){
             while(aux->prox != NULL) 
                 aux = aux->prox;
             aux->prox = p;
-            console_printf("aux id: %d prox id: %d", aux->id, aux->prox->id);
         }
         else{
             l = p;
         }
-        console_printf("(proc_adicionado_final %d)", p->id);
     }
 	return l;
 }

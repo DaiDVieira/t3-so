@@ -36,9 +36,6 @@ Lista_quadros* lst_pag_retira_primeira(Lista_quadros* l);
 Lista_quadros* lst_pag_busca(Lista_quadros* l, int id);
 
 unsigned int soma_bit_mais_significativo(unsigned int valor);
-/*int *lista_paginas_alterar(Lista_quadros* l, int tam, int pag_processo[QUANT_PAGINAS], int id_proc);
-void altera_envelhecimento(Lista_quadros* l, tabpag_t *tab, int *id_paginas);
-void atualiza_envelhecimento(Lista_quadros* l, tabpag_t *tab, int pag_processo[QUANT_PAGINAS], int id_proc);*/
 void atualiza_envelhecimento(Lista_quadros* l, tabpag_t *tab, int quadro_processo[QUANT_QUADROS], int id_proc);
 Lista_quadros* lst_pag_ordena(Lista_quadros* l);
 Lista_quadros* LRU_quadro_a_substituir(Lista_quadros* l, int *quadro);
